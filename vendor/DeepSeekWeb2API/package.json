@@ -1,0 +1,16 @@
+{
+  "name": "deepseek-web-2api",
+  "version": "0.1.0",
+  "description": "Expose DeepSeek Web as an OpenAI-compatible API with text and image-input support.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "login": "node src/index.js --login"
+  },
+  "dependencies": {
+    "playwright": "^1.57.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

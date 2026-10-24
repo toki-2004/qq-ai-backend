@@ -1,0 +1,113 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3000,
+    "apiKey": "sk-local",
+    "publicBaseUrl": "http://0.0.0.0:3000"
+  },
+  "deepseek": {
+    "url": "https://chat.deepseek.com/"
+  },
+  "browser": {
+    "headless": true,
+    "channel": "auto",
+    "prefer": "default",
+    "executablePath": "",
+    "idleTimeoutMs": 1200000
+  },
+  "paths": {
+    "userDataDir": "data/user-data",
+    "tempDir": "tmp"
+  },
+  "limits": {
+    "requestTimeoutMs": 300000,
+    "uploadTimeoutMs": 90000,
+    "keepaliveMs": 3000,
+    "imageLimit": 8,
+    "maxBodyBytes": 52428800
+  },
+  "conversation": {
+    "maxMessages": 0
+  },
+  "models": [
+    {
+      "id": "deepseek",
+      "aliases": [
+        "deepseek-chat"
+      ],
+      "owned_by": "deepseek-web",
+      "image_policy": "optional",
+      "capabilities": {
+        "thinking": false,
+        "search": false,
+        "expert": false,
+        "vision": false
+      }
+    },
+    {
+      "id": "deepseek-thinking",
+      "aliases": [
+        "deepseek-reasoner"
+      ],
+      "owned_by": "deepseek-web",
+      "image_policy": "optional",
+      "capabilities": {
+        "thinking": true,
+        "search": false,
+        "expert": false,
+        "vision": false
+      }
+    },
+    {
+      "id": "deepseek-search",
+      "aliases": [],
+      "owned_by": "deepseek-web",
+      "image_policy": "optional",
+      "capabilities": {
+        "thinking": false,
+        "search": true,
+        "expert": false,
+        "vision": false
+      }
+    },
+    {
+      "id": "deepseek-expert",
+      "aliases": [],
+      "owned_by": "deepseek-web",
+      "image_policy": "optional",
+      "capabilities": {
+        "thinking": false,
+        "search": false,
+        "expert": true,
+        "vision": false
+      }
+    },
+    {
+      "id": "deepseek-vision",
+      "aliases": [
+        "deepseek-image",
+        "deepseek-vl"
+      ],
+      "owned_by": "deepseek-web",
+      "image_policy": "optional",
+      "capabilities": {
+        "thinking": false,
+        "search": false,
+        "expert": false,
+        "vision": true
+      }
+    },
+    {
+      "id": "deepseek-vision-thinking",
+      "aliases": [],
+      "owned_by": "deepseek-web",
+      "image_policy": "optional",
+      "capabilities": {
+        "thinking": true,
+        "search": false,
+        "expert": false,
+        "vision": true
+      }
+    }
+  ]
+}

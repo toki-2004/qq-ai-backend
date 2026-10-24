@@ -1,0 +1,20 @@
+/config.json
+/config.json.*
+/chat_history.json
+/chat_history.json.*
+/pet_debug.log
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.zip
+tests/tmp/
+HANDOVER.md
+
+# vendor 只入库源码与配置；Node 运行时、依赖、登录态与临时文件在本机准备
+vendor/DeepSeekWeb2API/node_modules/
+vendor/DeepSeekWeb2API/node/
+vendor/DeepSeekWeb2API/data/
+vendor/DeepSeekWeb2API/tmp/
+vendor/DeepSeekWeb2API/web2api.log
