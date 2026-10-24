@@ -42,7 +42,7 @@ class FakeCfg:
 
 
 # 1. 配置只保留后端项
-check("version is set", APP_VERSION == "0.1.1")
+check("version is set", APP_VERSION == "0.1.2")
 for gone in ("affection_enabled", "work_label_enabled", "pet_image",
              "webchat_enabled", "balloon_text", "auto_start"):
     check("removed GUI config: %s" % gone, gone not in DEFAULT_CONFIG)
@@ -193,12 +193,22 @@ check("proactive speech is broadcast through QQ",
 # 6. 设置保存：只写后端字段
 from settings_dialog import SettingsDialog  # noqa: E402
 
-dlg = SettingsDialog(b.config)
+cfg = FakeCfg(dict(DEFAULT_CONFIG))
+dlg = SettingsDialog(cfg)
 dlg.qq_allowed.setText("123, 456")
 dlg._save()
 check("settings parse whitelist and keep a version",
-      b.config.get("qq_bridge_allowed_ids") == ["123", "456"]
-      and dlg.version_label.text() == "版本 v0.1.1")
+      cfg.get("qq_bridge_allowed_ids") == ["123", "456"]
+      and dlg.version_label.text() == "版本 v0.1.2")
+
+b._open_settings()
+opened = b._settings_dlg
+check("settings opens from the backend", opened is not None and opened.isVisible())
+opened.hide()
+b._open_settings()
+check("hidden settings window is shown again", b._settings_dlg is opened
+      and opened.isVisible())
+opened.reject()
 
 app.quit()
 print("\nRESULT: %d passed, %d failed" % (_passed, len(_failed)))

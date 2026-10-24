@@ -456,8 +456,7 @@ class QQAI:
     def _open_settings(self):
         if self._settings_dlg is not None:
             try:
-                if not self._settings_dlg.isVisible():
-                    self._settings_dlg.show()
+                self._settings_dlg.showNormal()
                 self._settings_dlg.raise_()
                 self._settings_dlg.activateWindow()
                 return
@@ -469,6 +468,8 @@ class QQAI:
         dlg.accepted.connect(self._on_settings_applied)
         self._settings_dlg = dlg
         dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _rebind_web2api(self):
         self.web2api.rebind_async()
@@ -511,6 +512,7 @@ class QQAI:
         icon = QIcon(icon_path) if os.path.isfile(icon_path) else QIcon.fromTheme("applications-games")
         tray = QSystemTrayIcon(icon)
         menu = QMenu()
+        self._tray_menu = menu
         menu.addAction("设置…", self._open_settings)
         menu.addSeparator()
         menu.addAction("退出", QApplication.instance().quit)
