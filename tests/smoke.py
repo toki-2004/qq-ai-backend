@@ -42,7 +42,7 @@ class FakeCfg:
 
 
 # 1. 配置只保留后端项
-check("version is set", APP_VERSION == "0.1.0")
+check("version is set", APP_VERSION == "0.1.1")
 for gone in ("affection_enabled", "work_label_enabled", "pet_image",
              "webchat_enabled", "balloon_text", "auto_start"):
     check("removed GUI config: %s" % gone, gone not in DEFAULT_CONFIG)
@@ -89,6 +89,13 @@ check("broadcast reaches every whitelisted user in order",
       sent == [("2", "hello"), ("3", "hello")])
 br2 = qq_mod.QQBridge(FakeCfg())
 check("broadcast without binding is dropped safely", br2.broadcast("x") is False)
+
+br3 = qq_mod.QQBridge(FakeCfg({"qq_bridge_allowed_ids": ["1"]}))
+br3._connect = lambda: None
+br3.config.data["qq_bridge_allowed_ids"] = ["9"]
+br3.start()
+check("start reloads the whitelist after settings change", br3.allowed_ids() == ["9"])
+br3.stop()
 
 # 3. 聊天记录持久化与上下文
 tmp = tempfile.mkdtemp()
@@ -191,7 +198,7 @@ dlg.qq_allowed.setText("123, 456")
 dlg._save()
 check("settings parse whitelist and keep a version",
       b.config.get("qq_bridge_allowed_ids") == ["123", "456"]
-      and dlg.version_label.text() == "版本 v0.1.0")
+      and dlg.version_label.text() == "版本 v0.1.1")
 
 app.quit()
 print("\nRESULT: %d passed, %d failed" % (_passed, len(_failed)))

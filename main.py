@@ -316,7 +316,8 @@ class QQAI:
             "这些是你此刻知道的事，聊天时顺手用，不要逐条播报，也不要解释自己是怎么知道的。"
         )
         parts.append("当前时间：%s。" % time.strftime("%Y-%m-%d %H:%M:%S"))
-        apps = running_apps()
+        apps = [a for a in running_apps()
+                if "DesktopPet.exe" not in a and "桌宠" not in a]
         if apps:
             parts.append("这台电脑上当前打开着这些应用（排最前的为前台窗口）：%s。"
                          % "；".join(apps))

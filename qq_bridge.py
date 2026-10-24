@@ -67,6 +67,7 @@ class QQBridge(QObject):
     def start(self):
         if self._running:
             return
+        self._allowed = self._load_allowed()  # 设置页改白名单后重启桥即生效
         self._running = True
         self._connect()
 
