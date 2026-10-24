@@ -43,7 +43,7 @@ class FakeCfg:
 
 
 # 1. 配置只保留后端项
-check("version is set", APP_VERSION == "0.1.5")
+check("version is set", APP_VERSION == "0.1.6")
 for gone in ("affection_enabled", "work_label_enabled", "pet_image",
              "webchat_enabled", "balloon_text", "auto_start"):
     check("removed GUI config: %s" % gone, gone not in DEFAULT_CONFIG)
@@ -353,13 +353,14 @@ dlg._save()
 check("settings parse whitelist and keep a version",
       cfg.get("qq_bridge_allowed_ids") == ["123", "456"]
       and cfg.get("qq_bridge_allowed_groups") == ["789", "1011"]
-      and dlg.version_label.text() == "版本 v0.1.5")
+      and dlg.version_label.text() == "版本 v0.1.6")
 
 b._open_settings()
 opened = b._settings_dlg
 check("settings opens from the backend", opened is not None and opened.isVisible())
 opened.hide()
 b._open_settings()
+QTest.qWait(200)
 check("hidden settings window is shown again", b._settings_dlg is opened
       and opened.isVisible())
 opened.reject()

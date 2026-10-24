@@ -546,22 +546,45 @@ class QQAI:
 
     # ---------- 设置 ----------
     def _open_settings(self):
+        petlog.log("settings: open requested")
         if self._settings_dlg is not None:
             try:
-                self._settings_dlg.showNormal()
-                self._settings_dlg.raise_()
-                self._settings_dlg.activateWindow()
+                dlg = self._settings_dlg
+                dlg.showNormal()
+                self._present_settings(dlg)
                 return
             except RuntimeError:
                 self._settings_dlg = None
-        dlg = SettingsDialog(self.config, rebind_callback=self._rebind_web2api)
+        try:
+            dlg = SettingsDialog(self.config, rebind_callback=self._rebind_web2api)
+        except Exception as e:
+            petlog.log("settings: create failed: %s" % e)
+            raise
         dlg.setAttribute(Qt.WA_DeleteOnClose)
         dlg.destroyed.connect(self._on_settings_destroyed)
         dlg.accepted.connect(self._on_settings_applied)
         self._settings_dlg = dlg
         dlg.show()
-        dlg.raise_()
-        dlg.activateWindow()
+        petlog.log("settings: shown visible=%s" % dlg.isVisible())
+        self._present_settings(dlg)
+
+    @staticmethod
+    def _present_settings(dlg):
+        def bring_forward():
+            try:
+                dlg.showNormal()
+                dlg.raise_()
+                dlg.activateWindow()
+                QApplication.setActiveWindow(dlg)
+                if sys.platform == "win32":
+                    import ctypes
+                    ctypes.windll.user32.SetForegroundWindow(int(dlg.winId()))
+            except RuntimeError:
+                pass
+
+        # 托盘菜单收起前 Windows 会忽略置前请求，延后执行并补一次兜底。
+        QTimer.singleShot(0, bring_forward)
+        QTimer.singleShot(150, bring_forward)
 
     def _rebind_web2api(self):
         self.web2api.rebind_async()
@@ -606,7 +629,7 @@ class QQAI:
         tray = QSystemTrayIcon(icon)
         menu = QMenu()
         self._tray_menu = menu
-        menu.addAction("设置…", self._open_settings)
+        menu.addAction("设置…", lambda: QTimer.singleShot(0, self._open_settings))
         menu.addSeparator()
         menu.addAction("退出", QApplication.instance().quit)
         tray.setContextMenu(menu)
