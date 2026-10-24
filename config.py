@@ -4,7 +4,7 @@ import json
 import os
 import shutil
 
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 
 DEFAULT_PERSONA = (
     "你是一个有自己生活、性格和情绪的女生。"
@@ -38,6 +38,7 @@ DEFAULT_CONFIG = {
     "qq_bridge_ws_url": "ws://127.0.0.1:3001",
     "qq_bridge_token": "",
     "qq_bridge_allowed_ids": [],
+    "qq_bridge_allowed_groups": [],
     # 睡眠状态（说“午安/晚安”后存这里，重启接着睡）
     "sleep_kind": "",
     "sleep_until": 0,

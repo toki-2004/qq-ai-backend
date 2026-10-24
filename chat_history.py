@@ -2,6 +2,7 @@
 """对话历史：JSON 持久化（跨重启续聊）。"""
 import json
 import os
+import re
 import time
 
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -86,3 +87,46 @@ class ChatHistory(QObject):
         """最近 n 条 user/assistant 消息（OpenAI messages 格式，不含 ts）。"""
         msgs = [m for m in self.items if m.get("role") in ("user", "assistant")]
         return [{"role": m["role"], "content": m["content"]} for m in msgs[-n:]]
+
+
+class HistoryStore:
+    """按会话分文件：每个私聊 QQ、每个群各一份历史。"""
+
+    def __init__(self, base_dir, max_n=200, legacy_path=None):
+        self.base_dir = base_dir
+        self.max_n = max(10, int(max_n or 200))
+        self.legacy_path = legacy_path
+        self._cache = {}
+        self._legacy_seeded = False
+        os.makedirs(self.base_dir, exist_ok=True)
+
+    def _path(self, key):
+        safe = re.sub(r"[^0-9A-Za-z_-]", "_", str(key or "proactive"))
+        return os.path.join(self.base_dir, safe + ".json")
+
+    def get(self, key):
+        key = str(key or "proactive")
+        if key in self._cache:
+            return self._cache[key]
+        hist = ChatHistory(self._path(key), self.max_n)
+        self._cache[key] = hist
+        return hist
+
+    def private(self, user_id):
+        key = "private-%s" % user_id
+        seed = not self._legacy_seeded
+        self._legacy_seeded = True
+        hist = self.get(key)
+        if seed and not hist.items and self.legacy_path and os.path.exists(self.legacy_path):
+            old = ChatHistory(self.legacy_path, self.max_n)
+            if old.items:
+                hist.items = old.items[-self.max_n:]
+                hist.save()
+                petlog.log("history migrated to %s" % hist.path)
+        return hist
+
+    def group(self, group_id):
+        return self.get("group-%s" % group_id)
+
+    def proactive(self):
+        return self.get("proactive")

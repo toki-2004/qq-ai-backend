@@ -2,6 +2,7 @@
 /config.json.*
 /chat_history.json
 /chat_history.json.*
+/history/
 /pet_debug.log
 __pycache__/
 *.pyc

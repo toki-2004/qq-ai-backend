@@ -197,7 +197,7 @@ class SettingsDialog(QDialog):
         w = QWidget()
         form = QFormLayout(w)
 
-        self.qq_check = QCheckBox("启用 QQ 私聊（OneBot 11）")
+        self.qq_check = QCheckBox("启用 QQ（OneBot 11，私聊 + 群）")
         self.qq_check.setChecked(bool(self.config.get("qq_bridge_enabled", True)))
         form.addRow(self.qq_check)
 
@@ -207,16 +207,25 @@ class SettingsDialog(QDialog):
 
         self.qq_token = QLineEdit(self.config.get("qq_bridge_token", ""))
         self.qq_token.setEchoMode(QLineEdit.Password)
-        self.qq_token.setPlaceholderText("与 NapCat 的 token 完全一致；没设就留空")
+        self.qq_token.setPlaceholderText("与 NapCat / SnowLuma 的 token 完全一致；没设就留空")
         form.addRow("Token", self.qq_token)
 
-        self.qq_allowed = QLineEdit(", ".join(
+        self.qq_allowed = QPlainTextEdit("\n".join(
             str(x) for x in (self.config.get("qq_bridge_allowed_ids") or [])))
-        self.qq_allowed.setPlaceholderText("你的 QQ 号；多个用逗号分隔")
+        self.qq_allowed.setPlaceholderText("每行一个 QQ 号")
+        self.qq_allowed.setFixedHeight(64)
         form.addRow("白名单 QQ", self.qq_allowed)
+
+        self.qq_groups = QPlainTextEdit("\n".join(
+            str(x) for x in (self.config.get("qq_bridge_allowed_groups") or [])))
+        self.qq_groups.setPlaceholderText("每行一个群号；留空不处理群消息")
+        self.qq_groups.setFixedHeight(64)
+        form.addRow("白名单群", self.qq_groups)
 
         hint = QLabel(
             "留空白名单时，第一个私聊机器人 QQ 的用户会自动绑定。\n"
+            "每个 QQ、每个群的历史分开保存；群里只在被 @ 时回复，其他消息只记录。\n"
+            "内置网页 AI 的多会话仍共用一个网页对话；要彻底隔离请用 OpenAI 兼容接口。\n"
             "NapCat / SnowLuma 的 WS 服务建议只监听 127.0.0.1 并设置 token，\n"
             "不要把无 token 的端口暴露到局域网。\n"
             "个人 QQ 自动化不是官方能力，存在风控/封号风险，务必使用小号。")
@@ -242,6 +251,8 @@ class SettingsDialog(QDialog):
         self.config.set("qq_bridge_enabled", self.qq_check.isChecked())
         self.config.set("qq_bridge_ws_url", self.qq_url.text().strip())
         self.config.set("qq_bridge_token", self.qq_token.text().strip())
-        ids = [x for x in re.split(r"[\s,，;；]+", self.qq_allowed.text().strip()) if x]
+        ids = [x for x in re.split(r"[\s,，;；]+", self.qq_allowed.toPlainText().strip()) if x]
         self.config.set("qq_bridge_allowed_ids", ids)
+        groups = [x for x in re.split(r"[\s,，;；]+", self.qq_groups.toPlainText().strip()) if x]
+        self.config.set("qq_bridge_allowed_groups", groups)
         self.accept()

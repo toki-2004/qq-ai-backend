@@ -4,20 +4,24 @@
 
 A headless backend that connects the built-in AI to a personal QQ account. There is no
 desktop pet, avatar, affection system, work-status label, idle-period display, or chat
-web page. It does one thing: chat like a real person in QQ private messages, and speak
-up on its own when the moment fits.
+web page. It does one thing: chat like a real person in QQ private chats and whitelisted
+groups, and speak up on its own when the moment fits.
 
 > Personal QQ automation is unofficial and may trigger risk controls, freezes, or bans.
 > **Use a secondary account only.**
 
 ## Features
 
-- **QQ private chat** via OneBot 11 (NapCat / SnowLuma): text and images, auto-binds
-  the first private sender, splits long replies, and deduplicates messages.
+- **QQ private chat** via OneBot 11 (NapCat / SnowLuma): multiple whitelisted QQ numbers,
+  text and images, auto-binds the first private sender, splits long replies, and
+  deduplicates messages.
+- **QQ group chat**: record every message in whitelisted groups; reply only when the bot
+  is mentioned.
 - **Proactive messages**: time of day, weather changes, sitting too long, long silence,
   and random small talk. What used to be desktop-pet bubbles is now sent to QQ.
-- **Conversation continuity across restarts**: history is persisted and the most recent
-  messages are imported when starting a new conversation, so the same chat continues.
+- **Conversation continuity across restarts**: each private QQ and each group has its own
+  history file, and the most recent messages are imported when starting a new
+  conversation. History files never mix.
 - **Configurable persona and AI endpoint**: built-in DeepSeek Web2API or any
   OpenAI-compatible API (base_url / API key / model).
 - **Computer context**: time, foreground apps, now-playing media, weather, and account
@@ -37,10 +41,13 @@ up on its own when the moment fits.
 4. Right-click the tray icon → **Settings…**:
    - **AI**: choose a preset and fill in the API key/model; keep the defaults for the
      built-in free AI.
-   - **QQ**: set the WS URL to `ws://127.0.0.1:3001` and the exact same token as NapCat/SnowLuma.
+   - **QQ**: set the WS URL to `ws://127.0.0.1:3001`, the exact same token as
+     NapCat/SnowLuma, and the whitelisted QQ/group numbers (one per line or
+     comma-separated). An empty group whitelist ignores all group messages.
 5. Send a private message from your main account to the bot account. The first private
    sender is added to the whitelist automatically.
-6. Chat normally. Proactive messages are sent to every whitelisted QQ.
+   Groups are never auto-bound; enter their group numbers manually.
+6. Chat normally. Proactive messages go only to whitelisted QQ numbers, never to groups.
 
 ### NapCat notes
 
@@ -90,15 +97,18 @@ keeps contextual triggers and disables random small talk.
 
 ## History and continuity
 
-- History file: `chat_history.json` next to the executable, capped by `chat_history_max`.
+- History files: `history/private-<QQ>.json` and `history/group-<group>.json` next to the
+  executable, each capped by `chat_history_max`. The old global `chat_history.json` is
+  migrated to the first private QQ that accesses it; other sessions start empty.
 - The first AI request after each start includes the latest `ai_context_n` messages
   (default 10), so a restart continues the same conversation.
-- The built-in web AI also keeps its own server-side conversation; a custom
-  OpenAI-compatible endpoint receives history on every request.
+- The built-in web AI still shares one server-side DeepSeek conversation across all
+  sessions; history files stay separate, but use a custom OpenAI-compatible endpoint if
+  AI context must be fully isolated.
 - QQ private images are downloaded and passed to the AI (one image, up to 15 MB), with
   optional text alongside. Vision requires a vision-capable model: the built-in DeepSeek
   Web2API supports it; the official `deepseek-chat` API is text-only and will error or
-  ignore the image. Group chats are still unsupported.
+  ignore the image. In groups, only messages that mention the bot download images.
 
 ## Configuration
 
@@ -115,6 +125,7 @@ keeps contextual triggers and disables random small talk.
 | `qq_bridge_ws_url` | NapCat WS URL, default `ws://127.0.0.1:3001` |
 | `qq_bridge_token` | Token matching NapCat |
 | `qq_bridge_allowed_ids` | Allowed QQ numbers; empty auto-binds the first private sender |
+| `qq_bridge_allowed_groups` | Allowed group numbers; empty ignores all group messages |
 | `accounts` / `poll_interval_sec` | Balance accounts and poll interval (context only) |
 
 `config.json` contains API keys and the QQ token. It is git-ignored — never commit or
@@ -151,12 +162,13 @@ python -m PyInstaller QQAIBackend.spec --noconfirm
 
 Copy `vendor/DeepSeekWeb2API` (including `node/` and `node_modules/`) into
 `dist/QQAIBackend/vendor/`, delete its `data/`, `tmp/`, and `web2api.log`, then zip the
-directory. Never ship `config.json`, `chat_history.json`, or login state.
+directory. Never ship `config.json`, `chat_history.json`, `history/`, or login state.
 
 ## Risks and limits
 
 - Unofficial QQ automation: risk-control actions, freezes, and bans are the user's
   responsibility. **Use a secondary account only.**
-- Private text/image only: no group chats, mentions, or recall events.
+- Private chats support text and images. Groups only record messages and reply when
+  mentioned; recalls, pokes, and similar events are not handled.
 - If a future NapCat release renames network options, pick the mode where NapCat acts as
   the WebSocket server and this backend connects as a client.

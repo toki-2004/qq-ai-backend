@@ -13,7 +13,7 @@ from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from config import APP_VERSION, DEFAULT_CONFIG, DEFAULT_PERSONA  # noqa: E402
-from chat_history import ChatHistory  # noqa: E402
+from chat_history import ChatHistory, HistoryStore  # noqa: E402
 import qq_bridge as qq_mod  # noqa: E402
 
 app = QApplication([])
@@ -43,7 +43,7 @@ class FakeCfg:
 
 
 # 1. 配置只保留后端项
-check("version is set", APP_VERSION == "0.1.3")
+check("version is set", APP_VERSION == "0.1.4")
 for gone in ("affection_enabled", "work_label_enabled", "pet_image",
              "webchat_enabled", "balloon_text", "auto_start"):
     check("removed GUI config: %s" % gone, gone not in DEFAULT_CONFIG)
@@ -69,6 +69,14 @@ check("extracts CQ image url", qq_mod.extract_image(
     == "https://example.com/a.jpg")
 check("rejects non-http image downloads",
       qq_mod.download_image("file:///tmp/a.jpg") == "")
+check("detects group mention", qq_mod.has_mention([
+    {"type": "at", "data": {"qq": "1"}},
+    {"type": "text", "data": {"text": "在吗"}},
+], "1") is True)
+check("ignores other group mentions", qq_mod.has_mention([
+    {"type": "at", "data": {"qq": "2"}},
+    {"type": "text", "data": {"text": "在吗"}},
+], "1") is False)
 
 cfg = FakeCfg()
 br = qq_mod.QQBridge(cfg)
@@ -90,7 +98,19 @@ check("dedupes and ignores non-whitelisted users", len(received) == 1
       and br.allowed_ids() == ["2"])
 br.handle_event({"post_type": "message", "message_type": "group", "self_id": 1,
                  "user_id": 2, "message_id": 12, "message": "group"})
-check("ignores group messages", len(received) == 1)
+check("ignores groups not in the whitelist", len(received) == 1)
+
+group_calls = []
+gbr = qq_mod.QQBridge(FakeCfg({"qq_bridge_allowed_groups": ["99"]}))
+gbr.groupMessageReceived.connect(
+    lambda *args: group_calls.append(args), Qt.DirectConnection)
+gbr.handle_event({"post_type": "message", "message_type": "group", "self_id": 1,
+                  "group_id": 99, "user_id": 2, "message_id": 20,
+                  "sender": {"card": "小明"},
+                  "message": [{"type": "at", "data": {"qq": "1"}},
+                              {"type": "text", "data": {"text": " 在吗"}}]})
+check("whitelisted group message is emitted",
+      group_calls == [("99", "2", "小明", "在吗", "", True)])
 sent = []
 br.send_text = lambda uid, text: sent.append((uid, text)) or True
 br._allowed = {"3", "2"}
@@ -132,6 +152,20 @@ check("history survives reload",
 h2.append("assistant", "主动消息", kind="selftalk")
 check("proactive messages stay in history", h2.context(10)[-1]["content"] == "主动消息")
 
+store_dir = tempfile.mkdtemp()
+legacy_path = os.path.join(store_dir, "legacy.json")
+legacy = ChatHistory(legacy_path, 200)
+legacy.append("user", "旧历史")
+store = HistoryStore(os.path.join(store_dir, "history"), 200, legacy_path)
+p1 = store.private("111")
+p2 = store.private("222")
+pg = store.group("999")
+check("each private QQ has its own history file",
+      p1.path != p2.path and p1.items[0]["content"] == "旧历史"
+      and p2.items == [] and pg.path not in (p1.path, p2.path))
+p1.append("user", "111 的消息")
+check("separate histories do not mix", p2.context(10) == [])
+
 # 4. 主动消息触发器
 import main as main_mod  # noqa: E402
 
@@ -163,9 +197,6 @@ check("time window fires once per day",
       "time_morning" in first and tags == first)
 
 # 5. 后端主流程：QQ 消息 -> AI -> 回复；重启后导入历史
-smoke_hist = os.path.join(tempfile.gettempdir(), "qqai_smoke_history.json")
-if os.path.exists(smoke_hist):
-    os.remove(smoke_hist)
 b = main_mod.QQAI()
 check("backend starts headless", b._tray is None and b.qq is not None)
 out = []
@@ -177,20 +208,21 @@ b.ai.chat = lambda messages, meta=None, system_fn=None, image=None: captured.app
 b._start_mono -= 11
 b._on_qq_message("123", "在吗")
 check("QQ message is recorded and sent to the AI queue",
-      b.history.items[-1]["content"] == "在吗"
+      b.histories.private("123").items[-1]["content"] == "在吗"
       and captured and captured[-1][1]["user_id"] == "123")
 meta = captured[-1][1]
 b._on_ai_reply("在。", True, meta)
 check("AI reply is recorded and sent back to the user",
-      b.history.items[-1]["content"] == "在。"
+      b.histories.private("123").items[-1]["content"] == "在。"
       and out[-1] == ("user", "123", "在。"))
 
 b._convo_primed = False
 b._ai_busy = False
 captured.clear()
-b.history.append("user", "继续")
+b.histories.private("123").append("user", "继续")
 b._ask_ai([{"role": "user", "content": "继续"}],
-          {"kind": "chat", "user_id": "123", "skip_history_last": True})
+          {"kind": "chat", "user_id": "123",
+           "history_key": "private-123", "skip_history_last": True})
 msgs = captured[-1][0]
 check("new conversation imports prior history",
       len(msgs) > 1 and any(m["role"] == "assistant" for m in msgs))
@@ -201,7 +233,8 @@ check("prompt knows it is chatting through QQ and can see images",
 b._ai_busy = False
 captured.clear()
 b._ask_ai([{"role": "user", "content": "再说"}],
-          {"kind": "chat", "user_id": "123", "skip_history_last": True})
+          {"kind": "chat", "user_id": "123",
+           "history_key": "private-123", "skip_history_last": True})
 check("built-in follow-up reuses the server-side conversation",
       len(captured[-1][0]) == 1)
 
@@ -213,7 +246,7 @@ captured.clear()
 b._on_qq_image("123", "看看这个", img.name)
 check("QQ image is queued with its text",
       captured and captured[-1][3] == img.name
-      and b.history.items[-1]["content"] == "看看这个")
+      and b.histories.private("123").items[-1]["content"] == "看看这个")
 b._on_ai_reply("看到了。", True, captured[-1][1])
 check("image temp file is removed after reply", not os.path.exists(img.name))
 
@@ -224,7 +257,7 @@ b._ai_busy = False
 captured.clear()
 b._on_qq_image("123", "", img2.name)
 check("image-only message gets a placeholder",
-      b.history.items[-1]["content"] == "（对方发来一张图片）")
+      b.histories.private("123").items[-1]["content"] == "（对方发来一张图片）")
 b._on_ai_reply("看到了。", True, captured[-1][1])
 
 b._ai_busy = False
@@ -233,18 +266,38 @@ out.clear()
 b._on_selftalk_tag("weather_sunny")
 b._on_ai_reply("今天天气不错。", True, captured[-1][1])
 check("proactive speech is broadcast through QQ",
-      out[-1] == ("broadcast", None, "今天天气不错。"))
+      out[-1] == ("broadcast", None, "今天天气不错。")
+      and b.histories.proactive().items[-1]["content"] == "今天天气不错。")
+
+b.qq.send_group_text = lambda gid, text: out.append(("group", gid, text)) or True
+b._ai_busy = False
+captured.clear()
+out.clear()
+b._on_group_message("999", "456", "小明", "大家好", "", False)
+check("group chatter is stored without a reply",
+      b.histories.group("999").items[-1]["content"] == "小明：大家好"
+      and not captured)
+b._on_group_message("999", "456", "小明", "在吗", "", True)
+check("group mention goes to AI with its own history key",
+      captured and captured[-1][1]["group_id"] == "999"
+      and captured[-1][1]["history_key"] == "group-999")
+b._on_ai_reply("在。", True, captured[-1][1])
+check("group reply is sent to the group",
+      out[-1] == ("group", "999", "在。")
+      and b.histories.group("999").items[-1]["content"] == "在。")
 
 # 6. 设置保存：只写后端字段
 from settings_dialog import SettingsDialog  # noqa: E402
 
 cfg = FakeCfg(dict(DEFAULT_CONFIG))
 dlg = SettingsDialog(cfg)
-dlg.qq_allowed.setText("123, 456")
+dlg.qq_allowed.setPlainText("123\n456")
+dlg.qq_groups.setPlainText("789\n1011")
 dlg._save()
 check("settings parse whitelist and keep a version",
       cfg.get("qq_bridge_allowed_ids") == ["123", "456"]
-      and dlg.version_label.text() == "版本 v0.1.3")
+      and cfg.get("qq_bridge_allowed_groups") == ["789", "1011"]
+      and dlg.version_label.text() == "版本 v0.1.4")
 
 b._open_settings()
 opened = b._settings_dlg

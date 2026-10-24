@@ -82,6 +82,23 @@ def extract_image(message):
     return ""
 
 
+def has_mention(message, self_id):
+    """群里是否 @ 了机器人。"""
+    if not self_id:
+        return False
+    if isinstance(message, list):
+        for segment in message:
+            if not isinstance(segment, dict) or segment.get("type") != "at":
+                continue
+            data = segment.get("data") or {}
+            if str(data.get("qq") or "") == str(self_id):
+                return True
+        return False
+    if isinstance(message, str):
+        return ("[CQ:at,qq=%s]" % self_id) in message
+    return False
+
+
 def _image_suffix(content_type, url):
     mime = str(content_type or "").split(";")[0].strip().lower()
     if mime in IMAGE_SUFFIXES:
@@ -152,6 +169,8 @@ def download_image(url, timeout=30):
 class QQBridge(QObject):
     messageReceived = pyqtSignal(str, str)  # user_id, text
     imageReceived = pyqtSignal(str, str, str)  # user_id, text, local image path
+    groupMessageReceived = pyqtSignal(str, str, str, str, str, bool)
+    # group_id, user_id, sender, text, local image path, mentioned
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
@@ -165,6 +184,7 @@ class QQBridge(QObject):
         self._reconnect.setSingleShot(True)
         self._reconnect.timeout.connect(self._connect)
         self._allowed = self._load_allowed()
+        self._allowed_groups = self._load_allowed_groups()
         self._running = False
         self._seq = 0
         self._seen = []
@@ -176,13 +196,23 @@ class QQBridge(QObject):
             raw = [raw]
         return {str(x).strip() for x in raw if str(x).strip()}
 
+    def _load_allowed_groups(self):
+        raw = self.config.get("qq_bridge_allowed_groups", [])
+        if not isinstance(raw, (list, tuple, set)):
+            raw = [raw]
+        return {str(x).strip() for x in raw if str(x).strip()}
+
     def allowed_ids(self):
         return sorted(self._allowed)
+
+    def allowed_groups(self):
+        return sorted(self._allowed_groups)
 
     def start(self):
         if self._running:
             return
         self._allowed = self._load_allowed()  # 设置页改白名单后重启桥即生效
+        self._allowed_groups = self._load_allowed_groups()
         self._running = True
         self._connect()
 
@@ -241,7 +271,12 @@ class QQBridge(QObject):
     def handle_event(self, event):
         if not isinstance(event, dict):
             return
-        if event.get("post_type") != "message" or event.get("message_type") != "private":
+        if event.get("post_type") != "message":
+            return
+        if event.get("message_type") == "group":
+            self._handle_group(event)
+            return
+        if event.get("message_type") != "private":
             return
         user_id = str(event.get("user_id") or "")
         if not user_id or user_id == str(event.get("self_id") or ""):
@@ -287,6 +322,58 @@ class QQBridge(QObject):
         petlog.log("qq bridge: image ready from %s" % user_id)
         self.imageReceived.emit(user_id, text, path)
 
+    def _handle_group(self, event):
+        group_id = str(event.get("group_id") or "")
+        user_id = str(event.get("user_id") or "")
+        self_id = str(event.get("self_id") or "")
+        if not group_id or not user_id or user_id == self_id:
+            return
+        if group_id not in self._allowed_groups:
+            return
+        message_id = str(event.get("message_id") or "")
+        if message_id and not self._mark_seen(message_id):
+            return
+        message = event.get("message")
+        text = extract_text(message)
+        image_url = extract_image(message)
+        if not text and not image_url:
+            return
+        sender = event.get("sender") or {}
+        name = str(sender.get("card") or sender.get("nickname") or user_id)
+        mentioned = has_mention(message, self_id)
+        if image_url and not mentioned:
+            self.groupMessageReceived.emit(group_id, user_id, name, text, "", False)
+            return
+        if image_url:
+            threading.Thread(
+                target=self._fetch_group_image,
+                args=(group_id, user_id, name, text, mentioned, image_url),
+                daemon=True).start()
+            return
+        petlog.log("qq bridge: group %s received %d chars from %s"
+                   % (group_id, len(text), user_id))
+        self.groupMessageReceived.emit(group_id, user_id, name, text, "", mentioned)
+
+    def _fetch_group_image(self, group_id, user_id, name, text, mentioned, url):
+        path = download_image(url)
+        if not self._running:
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            return
+        if not path:
+            if text:
+                self.groupMessageReceived.emit(
+                    group_id, user_id, name, text, "", mentioned)
+            elif mentioned:
+                self.send_group_text(group_id, "图片没下载下来，再发一次吧。")
+            return
+        petlog.log("qq bridge: group %s image ready from %s" % (group_id, user_id))
+        self.groupMessageReceived.emit(
+            group_id, user_id, name, text, path, mentioned)
+
     def _mark_seen(self, message_id):
         if message_id in self._seen_set:
             return False
@@ -313,6 +400,24 @@ class QQBridge(QObject):
             self._ws.sendTextMessage(json.dumps(payload, ensure_ascii=False))
             sent = True
             petlog.log("qq bridge: sent %d chars to %s" % (len(part), user_id))
+        return sent
+
+    def send_group_text(self, group_id, text):
+        if not self._running or self._ws.state() != QAbstractSocket.ConnectedState:
+            petlog.log("qq bridge: group send dropped (not connected)")
+            return False
+        target = int(group_id) if str(group_id).isdigit() else group_id
+        sent = False
+        for part in chunk_text(text):
+            self._seq += 1
+            payload = {
+                "action": "send_group_msg",
+                "params": {"group_id": target, "message": part, "auto_escape": True},
+                "echo": "qqai-%d" % self._seq,
+            }
+            self._ws.sendTextMessage(json.dumps(payload, ensure_ascii=False))
+            sent = True
+            petlog.log("qq bridge: sent %d chars to group %s" % (len(part), group_id))
         return sent
 
     def broadcast(self, text):

@@ -17,7 +17,7 @@ petlog.install_excepthooks()
 
 from ai_client import AIClient, PRESETS  # noqa: E402
 from balance import BalanceMonitor  # noqa: E402
-from chat_history import ChatHistory  # noqa: E402
+from chat_history import HistoryStore  # noqa: E402
 from qq_bridge import QQBridge  # noqa: E402
 from running_apps import audio_apps, media_track, running_apps  # noqa: E402
 from settings_dialog import SettingsDialog  # noqa: E402
@@ -235,16 +235,21 @@ class QQAI:
 
         self.talk = SelfTalkMonitor(self.config)
         self.ai = AIClient(self.config)
-        hist_path = os.path.join(PROJECT_DIR, "chat_history.json")
+        legacy_path = os.path.join(PROJECT_DIR, "chat_history.json")
         if SMOKE:
-            hist_path = os.path.join(tempfile.gettempdir(), "qqai_smoke_history.json")
-        self.history = ChatHistory(hist_path, self.config.get("chat_history_max", 200))
+            history_dir = tempfile.mkdtemp(prefix="qqai_smoke_history_")
+            legacy_path = None
+        else:
+            history_dir = os.path.join(PROJECT_DIR, "history")
+        self.histories = HistoryStore(
+            history_dir, self.config.get("chat_history_max", 200), legacy_path)
         self.sleep = SleepMonitor(self.config)
         self.weather = WeatherMonitor(self.config)
         self.balance = BalanceMonitor(self.config)
         self.qq = QQBridge(self.config)
         self.qq.messageReceived.connect(self._on_qq_message)
         self.qq.imageReceived.connect(self._on_qq_image)
+        self.qq.groupMessageReceived.connect(self._on_group_message)
         self.web2api = web2api.Manager()
         self.web2api.status.connect(self._on_web2api_status)
         self._last_weather = ""
@@ -302,18 +307,24 @@ class QQAI:
             self._notify(msg)
 
     # ---------- AI ----------
-    def _system_prompt(self, tag="", persona=True):
+    def _system_prompt(self, tag="", persona=True, group=False):
         parts = []
         if persona:
             text = str(self.config.get("ai_persona", "")).strip()
             if text:
                 parts.append(text)
+        scene = (
+            "你们此刻在 QQ 群里聊天，群里有其他人；只有被 @ 时你才说话。"
+            "你能看到最近的群消息，也能看到图片。"
+            if group else
+            "你们此刻通过 QQ 私聊，你看不到对方的表情和周围环境，但能读到文字，"
+            "也能看到对方发来的图片。"
+        )
         parts.append(
             "你是一个有真实生活感的人，有自己的生活、性格、情绪和判断。"
             "你和对方是平等的，没有主仆或从属关系；怎么称呼对方、保持怎样的距离，"
             "由你自己的感受决定。"
-            "你们此刻通过 QQ 私聊，你看不到对方的表情和周围环境，但能读到文字，"
-            "也能看到对方发来的图片。"
+            + scene +
             "你能自然感知到这台电脑上的时间、正在用的应用、声音和天气；"
             "这些是你此刻知道的事，聊天时顺手用，不要逐条播报，也不要解释自己是怎么知道的。"
         )
@@ -363,13 +374,16 @@ class QQAI:
             if fresh:
                 self._convo_primed = True
             n = int(self.config.get("ai_context_n", 10) or 10)
-            ctx = self.history.context(n)
+            hist = self.histories.get(meta.get("history_key", "proactive"))
+            ctx = hist.context(n)
             if meta.get("skip_history_last") and ctx:
                 ctx = ctx[:-1]
             msgs = (ctx if fresh else []) + messages
             self.ai.chat(
                 msgs, meta,
-                system_fn=lambda: self._system_prompt(meta.get("tag", ""), persona=fresh),
+                system_fn=lambda: self._system_prompt(
+                    meta.get("tag", ""), persona=fresh,
+                    group=bool(meta.get("group_id"))),
                 image=meta.get("image"))
         except Exception as e:
             petlog.log("ai dispatch failed: %s" % e)
@@ -391,11 +405,20 @@ class QQAI:
             if bool(self.config.get("ai_fallback_enabled", True)):
                 self._deliver(meta, self._failure_hint(meta))
         else:
-            self.history.append("assistant", text, kind=kind)
+            self.histories.get(meta.get("history_key", "proactive")).append(
+                "assistant", text, kind=kind)
+            if kind == "selftalk":
+                for user_id in self.qq.allowed_ids():
+                    self.histories.private(user_id).append(
+                        "assistant", text, kind=kind)
             self._deliver(meta, text)
         self._pump_ai()
 
     def _deliver(self, meta, text):
+        group_id = str(meta.get("group_id") or "")
+        if group_id:
+            self.qq.send_group_text(group_id, text)
+            return
         user_id = str(meta.get("user_id") or "")
         if user_id:
             self.qq.send_text(user_id, text)
@@ -419,9 +442,11 @@ class QQAI:
         kind = sleep.trigger_kind(text)
         if kind:
             self._pending_sleep = kind
-        self.history.append("user", text)
+        self.histories.private(user_id).append("user", text)
         self._ask_ai([{"role": "user", "content": text}],
-                     {"kind": "chat", "user_id": user_id, "skip_history_last": True})
+                     {"kind": "chat", "user_id": user_id,
+                      "history_key": "private-%s" % user_id,
+                      "skip_history_last": True})
 
     def _on_qq_image(self, user_id, text, path):
         if self.sleep.is_asleep():
@@ -433,9 +458,30 @@ class QQAI:
         if kind:
             self._pending_sleep = kind
         content = text or "（对方发来一张图片）"
-        self.history.append("user", content)
+        self.histories.private(user_id).append("user", content)
         self._ask_ai([{"role": "user", "content": content}],
                      {"kind": "chat", "user_id": user_id,
+                      "history_key": "private-%s" % user_id,
+                      "skip_history_last": True, "image": path})
+
+    def _on_group_message(self, group_id, user_id, sender, text, path, mentioned):
+        content = text or "（发来一张图片）"
+        line = "%s：%s" % (sender, content)
+        self.histories.group(group_id).append("user", line)
+        if not mentioned:
+            self._drop_image({"image": path})
+            return
+        if self.sleep.is_asleep():
+            self.qq.send_group_text(group_id, sleep.SLEEP_TEXT)
+            self._drop_image({"image": path})
+            return
+        self.talk.note_interaction()
+        kind = sleep.trigger_kind(text)
+        if kind:
+            self._pending_sleep = kind
+        self._ask_ai([{"role": "user", "content": line}],
+                     {"kind": "chat", "group_id": group_id, "user_id": user_id,
+                      "history_key": "group-%s" % group_id,
                       "skip_history_last": True, "image": path})
 
     @staticmethod
@@ -457,7 +503,7 @@ class QQAI:
                          "自然开口：结合你感知到的情境（正在播放的音乐、当前"
                          "打开的应用、天气等）说一句应景的话，口语化，不要生硬"
                          "复述背景文字。）" % reason}],
-            {"kind": "selftalk", "tag": tag})
+            {"kind": "selftalk", "tag": tag, "history_key": "proactive"})
 
     def _on_wake(self, kind):
         petlog.log("sleep: wake line for %s" % kind)
