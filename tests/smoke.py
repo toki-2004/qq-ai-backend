@@ -9,6 +9,7 @@ os.environ["PET_SMOKE"] = "1"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt5.QtCore import Qt  # noqa: E402
+from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from config import APP_VERSION, DEFAULT_CONFIG, DEFAULT_PERSONA  # noqa: E402
@@ -42,7 +43,7 @@ class FakeCfg:
 
 
 # 1. 配置只保留后端项
-check("version is set", APP_VERSION == "0.1.2")
+check("version is set", APP_VERSION == "0.1.3")
 for gone in ("affection_enabled", "work_label_enabled", "pet_image",
              "webchat_enabled", "balloon_text", "auto_start"):
     check("removed GUI config: %s" % gone, gone not in DEFAULT_CONFIG)
@@ -59,6 +60,15 @@ check("extracts text segments", qq_mod.extract_text([
 ]) == "你好")
 check("strips CQ codes", qq_mod.extract_text("hi[CQ:face,id=1]") == "hi")
 check("chunks long replies", len(qq_mod.chunk_text("x" * 3100)) == 3)
+check("extracts image url", qq_mod.extract_image([
+    {"type": "text", "data": {"text": "看图"}},
+    {"type": "image", "data": {"url": "https://example.com/a.jpg"}},
+]) == "https://example.com/a.jpg")
+check("extracts CQ image url", qq_mod.extract_image(
+    "看图[CQ:image,file=a.jpg,url=https://example.com/a.jpg]")
+    == "https://example.com/a.jpg")
+check("rejects non-http image downloads",
+      qq_mod.download_image("file:///tmp/a.jpg") == "")
 
 cfg = FakeCfg()
 br = qq_mod.QQBridge(cfg)
@@ -89,6 +99,18 @@ check("broadcast reaches every whitelisted user in order",
       sent == [("2", "hello"), ("3", "hello")])
 br2 = qq_mod.QQBridge(FakeCfg())
 check("broadcast without binding is dropped safely", br2.broadcast("x") is False)
+
+image_calls = []
+br._running = True
+br._fetch_image = lambda uid, text, url: image_calls.append((uid, text, url))
+br.handle_event({"post_type": "message", "message_type": "private", "self_id": 1,
+                 "user_id": 2, "message_id": 13,
+                 "message": [{"type": "image",
+                              "data": {"url": "https://example.com/a.jpg"}}]})
+QTest.qWait(100)
+check("image messages are accepted",
+      image_calls == [("2", "", "https://example.com/a.jpg")])
+br._running = False
 
 br3 = qq_mod.QQBridge(FakeCfg({"qq_bridge_allowed_ids": ["1"]}))
 br3._connect = lambda: None
@@ -151,7 +173,7 @@ b.qq.send_text = lambda uid, text: out.append(("user", uid, text)) or True
 b.qq.broadcast = lambda text: out.append(("broadcast", None, text)) or True
 captured = []
 b.ai.chat = lambda messages, meta=None, system_fn=None, image=None: captured.append(
-    (messages, meta, system_fn))
+    (messages, meta, system_fn, image))
 b._start_mono -= 11
 b._on_qq_message("123", "在吗")
 check("QQ message is recorded and sent to the AI queue",
@@ -173,7 +195,8 @@ msgs = captured[-1][0]
 check("new conversation imports prior history",
       len(msgs) > 1 and any(m["role"] == "assistant" for m in msgs))
 prompt = captured[-1][2]()
-check("prompt knows it is chatting through QQ", "QQ" in prompt)
+check("prompt knows it is chatting through QQ and can see images",
+      "QQ" in prompt and "图片" in prompt)
 
 b._ai_busy = False
 captured.clear()
@@ -181,6 +204,28 @@ b._ask_ai([{"role": "user", "content": "再说"}],
           {"kind": "chat", "user_id": "123", "skip_history_last": True})
 check("built-in follow-up reuses the server-side conversation",
       len(captured[-1][0]) == 1)
+
+img = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+img.write(b"png")
+img.close()
+b._ai_busy = False
+captured.clear()
+b._on_qq_image("123", "看看这个", img.name)
+check("QQ image is queued with its text",
+      captured and captured[-1][3] == img.name
+      and b.history.items[-1]["content"] == "看看这个")
+b._on_ai_reply("看到了。", True, captured[-1][1])
+check("image temp file is removed after reply", not os.path.exists(img.name))
+
+img2 = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+img2.write(b"png")
+img2.close()
+b._ai_busy = False
+captured.clear()
+b._on_qq_image("123", "", img2.name)
+check("image-only message gets a placeholder",
+      b.history.items[-1]["content"] == "（对方发来一张图片）")
+b._on_ai_reply("看到了。", True, captured[-1][1])
 
 b._ai_busy = False
 captured.clear()
@@ -199,7 +244,7 @@ dlg.qq_allowed.setText("123, 456")
 dlg._save()
 check("settings parse whitelist and keep a version",
       cfg.get("qq_bridge_allowed_ids") == ["123", "456"]
-      and dlg.version_label.text() == "版本 v0.1.2")
+      and dlg.version_label.text() == "版本 v0.1.3")
 
 b._open_settings()
 opened = b._settings_dlg

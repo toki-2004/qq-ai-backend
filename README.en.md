@@ -12,8 +12,8 @@ up on its own when the moment fits.
 
 ## Features
 
-- **QQ private chat** via OneBot 11 (NapCat): auto-binds the first private sender,
-  splits long replies, and deduplicates messages.
+- **QQ private chat** via OneBot 11 (NapCat / SnowLuma): text and images, auto-binds
+  the first private sender, splits long replies, and deduplicates messages.
 - **Proactive messages**: time of day, weather changes, sitting too long, long silence,
   and random small talk. What used to be desktop-pet bubbles is now sent to QQ.
 - **Conversation continuity across restarts**: history is persisted and the most recent
@@ -26,8 +26,8 @@ up on its own when the moment fits.
 
 ## Quick start (release build)
 
-1. Install and sign in to [NapCatQQ](https://github.com/NapNeko/NapCatQQ) with a
-   **secondary QQ account**.
+1. Install and sign in to [NapCatQQ](https://github.com/NapNeko/NapCatQQ) or
+   [SnowLuma](https://github.com/SnowLuma/SnowLuma) with a **secondary QQ account**.
 2. In the NapCat WebUI, add a `WS forward server` (OneBot 11):
    - host: `127.0.0.1`
    - port: `3001`
@@ -37,7 +37,7 @@ up on its own when the moment fits.
 4. Right-click the tray icon → **Settings…**:
    - **AI**: choose a preset and fill in the API key/model; keep the defaults for the
      built-in free AI.
-   - **QQ**: set the WS URL to `ws://127.0.0.1:3001` and the exact same token as NapCat.
+   - **QQ**: set the WS URL to `ws://127.0.0.1:3001` and the exact same token as NapCat/SnowLuma.
 5. Send a private message from your main account to the bot account. The first private
    sender is added to the whitelist automatically.
 6. Chat normally. Proactive messages are sent to every whitelisted QQ.
@@ -53,6 +53,15 @@ up on its own when the moment fits.
 - Bind only to `127.0.0.1`. Do not expose this unencrypted port to the LAN or internet.
 - Running multiple clients (for example the desktop pet and this backend) makes both
   receive the same private message and may double-reply; run only one.
+
+### SnowLuma notes
+
+- Download the full Windows package (Lite needs Node.js 24+), run `launcher.bat`, open
+  `http://localhost:5099`, and sign in with the initial password from the startup log.
+- Keep the official QQ NT client signed in and attach its process in the WebUI.
+- Create a **WS server** node: host `127.0.0.1`, port `3001`, path `/`, role `Universal`,
+  message format `array`, a generated token, and self-message reporting off.
+- Use the same `ws://127.0.0.1:3001` and token here. NapCat and SnowLuma cannot share port 3001.
 
 ## AI settings
 
@@ -86,7 +95,10 @@ keeps contextual triggers and disables random small talk.
   (default 10), so a restart continues the same conversation.
 - The built-in web AI also keeps its own server-side conversation; a custom
   OpenAI-compatible endpoint receives history on every request.
-- QQ images and group chats are not supported; private text only.
+- QQ private images are downloaded and passed to the AI (one image, up to 15 MB), with
+  optional text alongside. Vision requires a vision-capable model: the built-in DeepSeek
+  Web2API supports it; the official `deepseek-chat` API is text-only and will error or
+  ignore the image. Group chats are still unsupported.
 
 ## Configuration
 
@@ -145,6 +157,6 @@ directory. Never ship `config.json`, `chat_history.json`, or login state.
 
 - Unofficial QQ automation: risk-control actions, freezes, and bans are the user's
   responsibility. **Use a secondary account only.**
-- Private text only: no images, group chats, mentions, or recall events.
+- Private text/image only: no group chats, mentions, or recall events.
 - If a future NapCat release renames network options, pick the mode where NapCat acts as
   the WebSocket server and this backend connects as a client.

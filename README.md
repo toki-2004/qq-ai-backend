@@ -9,7 +9,7 @@
 
 ## 功能
 
-- **QQ 私聊**：通过 OneBot 11（NapCat）收发私聊文字，支持首个私聊用户自动绑定、长消息分片、去重。
+- **QQ 私聊**：通过 OneBot 11（NapCat / SnowLuma）收发私聊文字和图片，支持首个私聊用户自动绑定、长消息分片、去重。
 - **主动消息**：时段、天气变化、久坐、长时间没互动、随机闲聊；原来桌宠气泡里的自言自语，现在直接发到 QQ。
 - **跨重启续聊**：聊天记录落盘；重启或新开对话时自动导入最近若干条历史，保证同一个对话连贯。
 - **人设与 AI 接口可配**：内置 DeepSeek Web2API，或任意 OpenAI 兼容接口（base_url / API Key / model）。
@@ -18,7 +18,8 @@
 
 ## 快速开始（发布包）
 
-1. 安装并登录 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)，登录一个 **QQ 小号**。
+1. 安装并登录 [NapCatQQ](https://github.com/NapNeko/NapCatQQ) 或
+   [SnowLuma](https://github.com/SnowLuma/SnowLuma)，登录一个 **QQ 小号**。
 2. 在 NapCat WebUI 里添加 `WS 正向服务器`（OneBot 11）：
    - 监听地址：`127.0.0.1`
    - 端口：`3001`
@@ -27,7 +28,7 @@
 3. 下载 Release 里的 `QQAIBackend-v*.zip`，解压后运行 `QQAIBackend.exe`。
 4. 右键托盘图标 →「设置…」：
    - **AI**：选厂商预设，填 API Key / 模型；用内置免费 AI 就保留默认值。
-   - **QQ**：填 WS 地址 `ws://127.0.0.1:3001` 和与 NapCat 完全一致的 Token。
+   - **QQ**：填 WS 地址 `ws://127.0.0.1:3001` 和与 NapCat/SnowLuma 完全一致的 Token。
 5. 用你的主号私聊这个机器人小号，发一句话。第一次私聊的用户会被自动加入白名单。
 6. 之后正常聊天即可；主动消息也会发给白名单里的 QQ。
 
@@ -39,6 +40,15 @@
   `qq bridge: onebot error 1403` 和 `disconnected code=1000`。
 - 只监听 `127.0.0.1`，不要把这个无 TLS 的端口暴露到局域网或公网。
 - 如果同时运行多个客户端（例如桌宠和本后端），它们会都收到同一条私聊，可能重复回复；请只开一个。
+
+### SnowLuma 配置要点
+
+- 下载 Windows 完整包（Lite 版需要 Node.js 24+），解压后运行 `launcher.bat`，
+  打开 `http://localhost:5099`，用启动日志里的初始密码登录并修改密码。
+- 保持官方 QQ NT 已登录，在 WebUI 首页把 QQ 进程接入。
+- 「节点配置 → WS 服务端」新建：监听 `127.0.0.1`、端口 `3001`、路径 `/`、
+  角色 `Universal`、消息格式 `数组`、授权 Token 自己生成，关闭“上报自身消息”。
+- 本程序设置里填同一个 `ws://127.0.0.1:3001` 和 Token。NapCat 与 SnowLuma 不能同时占用 3001。
 
 ## AI 设置
 
@@ -65,7 +75,9 @@
 - 每次启动后的第一条 AI 请求会带上最近 `ai_context_n` 条历史（默认 10 条），
   所以重启后还是同一个对话。
 - 内置网页 AI 在服务端也保留对话；自定义 OpenAI 兼容接口则每次都携带历史。
-- 暂不支持 QQ 图片和群聊，只处理私聊文字。
+- QQ 私聊图片会下载后交给 AI 识图（单张，最大 15 MB），文字和图片可以同发。
+  识图需要 AI 模型支持视觉：内置 DeepSeek Web2API 支持；DeepSeek 开放平台的
+  `deepseek-chat` 是纯文本模型，收到图片会报错或忽略。群聊仍不支持。
 
 ## 配置文件
 

@@ -244,6 +244,7 @@ class QQAI:
         self.balance = BalanceMonitor(self.config)
         self.qq = QQBridge(self.config)
         self.qq.messageReceived.connect(self._on_qq_message)
+        self.qq.imageReceived.connect(self._on_qq_image)
         self.web2api = web2api.Manager()
         self.web2api.status.connect(self._on_web2api_status)
         self._last_weather = ""
@@ -311,7 +312,8 @@ class QQAI:
             "你是一个有真实生活感的人，有自己的生活、性格、情绪和判断。"
             "你和对方是平等的，没有主仆或从属关系；怎么称呼对方、保持怎样的距离，"
             "由你自己的感受决定。"
-            "你们此刻通过 QQ 私聊，你看不到对方的表情和周围环境，只能读到文字。"
+            "你们此刻通过 QQ 私聊，你看不到对方的表情和周围环境，但能读到文字，"
+            "也能看到对方发来的图片。"
             "你能自然感知到这台电脑上的时间、正在用的应用、声音和天气；"
             "这些是你此刻知道的事，聊天时顺手用，不要逐条播报，也不要解释自己是怎么知道的。"
         )
@@ -367,14 +369,17 @@ class QQAI:
             msgs = (ctx if fresh else []) + messages
             self.ai.chat(
                 msgs, meta,
-                system_fn=lambda: self._system_prompt(meta.get("tag", ""), persona=fresh))
+                system_fn=lambda: self._system_prompt(meta.get("tag", ""), persona=fresh),
+                image=meta.get("image"))
         except Exception as e:
             petlog.log("ai dispatch failed: %s" % e)
+            self._drop_image(meta)
             self._ai_busy = False
             self._pump_ai()
 
     def _on_ai_reply(self, text, ok, meta):
         meta = meta or {}
+        self._drop_image(meta)
         kind = meta.get("kind", "chat")
         self._ai_busy = False
         if self._pending_sleep and kind == "chat":
@@ -417,6 +422,31 @@ class QQAI:
         self.history.append("user", text)
         self._ask_ai([{"role": "user", "content": text}],
                      {"kind": "chat", "user_id": user_id, "skip_history_last": True})
+
+    def _on_qq_image(self, user_id, text, path):
+        if self.sleep.is_asleep():
+            self.qq.send_text(user_id, sleep.SLEEP_TEXT)
+            self._drop_image({"image": path})
+            return
+        self.talk.note_interaction()
+        kind = sleep.trigger_kind(text)
+        if kind:
+            self._pending_sleep = kind
+        content = text or "（对方发来一张图片）"
+        self.history.append("user", content)
+        self._ask_ai([{"role": "user", "content": content}],
+                     {"kind": "chat", "user_id": user_id,
+                      "skip_history_last": True, "image": path})
+
+    @staticmethod
+    def _drop_image(meta):
+        path = str((meta or {}).get("image") or "")
+        if not path:
+            return
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
     # ---------- 主动消息 ----------
     def _on_selftalk_tag(self, tag):

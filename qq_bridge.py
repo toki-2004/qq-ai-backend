@@ -1,11 +1,19 @@
 # -*- coding: utf-8 -*-
-"""OneBot 11 私聊桥：NapCat 收 QQ 消息 <-> 本地 AI 后端。
+"""OneBot 11 私聊桥：NapCat/SnowLuma 收 QQ 消息 <-> 本地 AI 后端。
 
 只负责收发消息；AI 生成、聊天记录与主动消息都由 main.py 统一调度，
 这样 QQ 对话与主动消息共用同一段历史，重启后也能接着聊。
 """
+import html
+import ipaddress
 import json
+import os
 import re
+import ssl
+import tempfile
+import threading
+import urllib.request
+from urllib.parse import urlparse
 
 from PyQt5.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt5.QtNetwork import QAbstractSocket, QNetworkRequest
@@ -14,6 +22,15 @@ from PyQt5.QtWebSockets import QWebSocket
 import petlog
 
 CQ_RE = re.compile(r"\[CQ:[^\]]+\]")
+CQ_IMAGE_RE = re.compile(r"\[CQ:image,([^\]]+)\]")
+MAX_IMAGE_BYTES = 15 * 1024 * 1024
+IMAGE_SUFFIXES = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 
 
 def extract_text(message):
@@ -35,8 +52,106 @@ def chunk_text(text, limit=1500):
     return [text[i:i + limit] for i in range(0, len(text), limit)] or [""]
 
 
+def _cq_params(raw):
+    params = {}
+    for part in raw.split(","):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            params[key.strip()] = html.unescape(value)
+    return params
+
+
+def extract_image(message):
+    """返回 OneBot 消息里第一张可下载图片的 URL。"""
+    if isinstance(message, list):
+        for segment in message:
+            if not isinstance(segment, dict) or segment.get("type") != "image":
+                continue
+            data = segment.get("data") or {}
+            url = str(data.get("url") or data.get("file") or "").strip()
+            if url.startswith(("http://", "https://")):
+                return url
+        return ""
+    if isinstance(message, str):
+        match = CQ_IMAGE_RE.search(message)
+        if not match:
+            return ""
+        data = _cq_params(match.group(1))
+        url = str(data.get("url") or data.get("file") or "").strip()
+        return url if url.startswith(("http://", "https://")) else ""
+    return ""
+
+
+def _image_suffix(content_type, url):
+    mime = str(content_type or "").split(";")[0].strip().lower()
+    if mime in IMAGE_SUFFIXES:
+        return IMAGE_SUFFIXES[mime]
+    path = urlparse(url).path.lower()
+    for suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        if path.endswith(suffix):
+            return ".jpg" if suffix == ".jpeg" else suffix
+    return ""
+
+
+def download_image(url, timeout=30):
+    """下载一张 QQ 图片到临时文件；失败返回空字符串。
+
+    shortcut: 只校验协议和 IP 字面量，域名解析到内网的情况未拦截；OneBot
+    默认只监听本机，换公网部署时再加 DNS 解析校验。
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return ""
+        try:
+            ip = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            ip = None
+        if ip and (ip.is_private or ip.is_loopback or ip.is_link_local
+                   or ip.is_reserved or ip.is_multicast):
+            petlog.log("qq bridge: refused private image url")
+            return ""
+        context = ssl.create_default_context()
+        with urllib.request.urlopen(url, timeout=timeout, context=context) as response:
+            if getattr(response, "status", 200) != 200:
+                return ""
+            suffix = _image_suffix(response.headers.get("Content-Type"), url)
+            if not suffix:
+                petlog.log("qq bridge: unsupported image type")
+                return ""
+            length = int(response.headers.get("Content-Length") or 0)
+            if length > MAX_IMAGE_BYTES:
+                petlog.log("qq bridge: image too large")
+                return ""
+            fd, path = tempfile.mkstemp(prefix="qqai_img_", suffix=suffix)
+            total = 0
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    while True:
+                        chunk = response.read(64 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > MAX_IMAGE_BYTES:
+                            raise ValueError("image too large")
+                        f.write(chunk)
+                if total == 0:
+                    raise ValueError("empty image")
+                return path
+            except Exception:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                raise
+    except Exception as e:
+        petlog.log("qq bridge: image download failed: %s" % e)
+        return ""
+
+
 class QQBridge(QObject):
     messageReceived = pyqtSignal(str, str)  # user_id, text
+    imageReceived = pyqtSignal(str, str, str)  # user_id, text, local image path
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
@@ -143,10 +258,34 @@ class QQBridge(QObject):
             petlog.log("qq bridge: ignored user %s" % user_id)
             return
         text = extract_text(event.get("message"))
-        if not text:
+        image_url = extract_image(event.get("message"))
+        if not text and not image_url:
+            return
+        if image_url:
+            petlog.log("qq bridge: image from %s" % user_id)
+            threading.Thread(target=self._fetch_image,
+                             args=(user_id, text, image_url), daemon=True).start()
             return
         petlog.log("qq bridge: received %d chars from %s" % (len(text), user_id))
         self.messageReceived.emit(user_id, text)
+
+    def _fetch_image(self, user_id, text, url):
+        path = download_image(url)
+        if not self._running:
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            return
+        if not path:
+            if text:
+                self.messageReceived.emit(user_id, text)
+            else:
+                self.send_text(user_id, "图片没下载下来，再发一次吧。")
+            return
+        petlog.log("qq bridge: image ready from %s" % user_id)
+        self.imageReceived.emit(user_id, text, path)
 
     def _mark_seen(self, message_id):
         if message_id in self._seen_set:

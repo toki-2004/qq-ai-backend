@@ -203,7 +203,7 @@ class SettingsDialog(QDialog):
 
         self.qq_url = QLineEdit(self.config.get("qq_bridge_ws_url", "ws://127.0.0.1:3001"))
         self.qq_url.setPlaceholderText("ws://127.0.0.1:3001")
-        form.addRow("NapCat WS 地址", self.qq_url)
+        form.addRow("OneBot WS 地址（NapCat / SnowLuma）", self.qq_url)
 
         self.qq_token = QLineEdit(self.config.get("qq_bridge_token", ""))
         self.qq_token.setEchoMode(QLineEdit.Password)
@@ -217,7 +217,7 @@ class SettingsDialog(QDialog):
 
         hint = QLabel(
             "留空白名单时，第一个私聊机器人 QQ 的用户会自动绑定。\n"
-            "NapCat 的 WS 服务建议只监听 127.0.0.1 并设置 token，\n"
+            "NapCat / SnowLuma 的 WS 服务建议只监听 127.0.0.1 并设置 token，\n"
             "不要把无 token 的端口暴露到局域网。\n"
             "个人 QQ 自动化不是官方能力，存在风控/封号风险，务必使用小号。")
         hint.setWordWrap(True)
