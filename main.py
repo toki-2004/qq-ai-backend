@@ -540,9 +540,13 @@ class QQAI:
             QTimer.singleShot(4000, lambda: self._on_wake(kind))
 
     def _notify(self, text):
-        """系统/状态类主动消息：同样走 QQ 白名单。"""
+        """系统/状态通知只发给白名单首位，避免打扰其他账号。"""
         petlog.log("notify: %s" % text)
-        self.qq.broadcast(text)
+        user_id = self.qq.primary_id()
+        if user_id:
+            self.qq.send_text(user_id, text)
+        else:
+            petlog.log("notify: no whitelist user, message dropped")
 
     # ---------- 设置 ----------
     def _open_settings(self):

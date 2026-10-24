@@ -205,6 +205,17 @@ class QQBridge(QObject):
     def allowed_ids(self):
         return sorted(self._allowed)
 
+    def primary_id(self):
+        """白名单第一项；按设置页填写顺序，不是排序后的第一项。"""
+        raw = self.config.get("qq_bridge_allowed_ids", [])
+        if not isinstance(raw, (list, tuple, set)):
+            raw = [raw]
+        for value in raw:
+            user_id = str(value).strip()
+            if user_id:
+                return user_id
+        return sorted(self._allowed)[0] if self._allowed else ""
+
     def allowed_groups(self):
         return sorted(self._allowed_groups)
 

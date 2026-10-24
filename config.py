@@ -4,7 +4,7 @@ import json
 import os
 import shutil
 
-APP_VERSION = "0.1.6"
+APP_VERSION = "0.1.7"
 
 DEFAULT_PERSONA = (
     "你是一个有自己生活、性格和情绪的女生。"

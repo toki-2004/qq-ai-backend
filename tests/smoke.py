@@ -43,7 +43,7 @@ class FakeCfg:
 
 
 # 1. 配置只保留后端项
-check("version is set", APP_VERSION == "0.1.6")
+check("version is set", APP_VERSION == "0.1.7")
 for gone in ("affection_enabled", "work_label_enabled", "pet_image",
              "webchat_enabled", "balloon_text", "auto_start"):
     check("removed GUI config: %s" % gone, gone not in DEFAULT_CONFIG)
@@ -115,6 +115,8 @@ check("whitelisted group message is emitted",
 sent = []
 br.send_text = lambda uid, text: sent.append((uid, text)) or True
 br._allowed = {"3", "2"}
+br.config.data["qq_bridge_allowed_ids"] = ["3", "2"]
+check("primary whitelist id keeps configured order", br.primary_id() == "3")
 br.broadcast("hello")
 check("broadcast reaches every whitelisted user in order",
       sent == [("2", "hello"), ("3", "hello")])
@@ -325,6 +327,12 @@ check("proactive speech is broadcast through QQ",
       out[-1] == ("broadcast", None, "今天天气不错。")
       and b.histories.proactive().items[-1]["content"] == "今天天气不错。")
 
+b.qq.primary_id = lambda: "123"
+out.clear()
+b._notify("内置 AI 已就绪")
+check("status notices only go to the first whitelisted QQ",
+      out == [("user", "123", "内置 AI 已就绪")])
+
 b.qq.send_group_text = lambda gid, text: out.append(("group", gid, text)) or True
 b._ai_busy = False
 captured.clear()
@@ -353,7 +361,7 @@ dlg._save()
 check("settings parse whitelist and keep a version",
       cfg.get("qq_bridge_allowed_ids") == ["123", "456"]
       and cfg.get("qq_bridge_allowed_groups") == ["789", "1011"]
-      and dlg.version_label.text() == "版本 v0.1.6")
+      and dlg.version_label.text() == "版本 v0.1.7")
 
 b._open_settings()
 opened = b._settings_dlg
