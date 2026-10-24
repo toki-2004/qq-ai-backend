@@ -43,7 +43,7 @@ class FakeCfg:
 
 
 # 1. 配置只保留后端项
-check("version is set", APP_VERSION == "0.1.4")
+check("version is set", APP_VERSION == "0.1.5")
 for gone in ("affection_enabled", "work_label_enabled", "pet_image",
              "webchat_enabled", "balloon_text", "auto_start"):
     check("removed GUI config: %s" % gone, gone not in DEFAULT_CONFIG)
@@ -81,13 +81,14 @@ check("ignores other group mentions", qq_mod.has_mention([
 cfg = FakeCfg()
 br = qq_mod.QQBridge(cfg)
 received = []
-br.messageReceived.connect(lambda u, t: received.append((u, t)), Qt.DirectConnection)
+br.messageReceived.connect(lambda u, t, n: received.append((u, t, n)), Qt.DirectConnection)
 br.handle_event({"post_type": "message", "message_type": "private", "self_id": 1,
                  "user_id": 2, "message_id": 10,
+                 "sender": {"nickname": "向阳而生."},
                  "message": [{"type": "text", "data": {"text": "hi"}}]})
 check("binds first private user", br.allowed_ids() == ["2"]
       and cfg.data["qq_bridge_allowed_ids"] == ["2"]
-      and received == [("2", "hi")])
+      and received == [("2", "hi", "向阳而生.")])
 br.handle_event({"post_type": "message", "message_type": "private", "self_id": 1,
                  "user_id": 2, "message_id": 10,
                  "message": [{"type": "text", "data": {"text": "hi"}}]})
@@ -122,14 +123,16 @@ check("broadcast without binding is dropped safely", br2.broadcast("x") is False
 
 image_calls = []
 br._running = True
-br._fetch_image = lambda uid, text, url: image_calls.append((uid, text, url))
+br._fetch_image = lambda uid, text, url, name: image_calls.append(
+    (uid, text, url, name))
 br.handle_event({"post_type": "message", "message_type": "private", "self_id": 1,
                  "user_id": 2, "message_id": 13,
+                 "sender": {"nickname": "向阳而生."},
                  "message": [{"type": "image",
                               "data": {"url": "https://example.com/a.jpg"}}]})
 QTest.qWait(100)
 check("image messages are accepted",
-      image_calls == [("2", "", "https://example.com/a.jpg")])
+      image_calls == [("2", "", "https://example.com/a.jpg", "向阳而生.")])
 br._running = False
 
 br3 = qq_mod.QQBridge(FakeCfg({"qq_bridge_allowed_ids": ["1"]}))
@@ -161,10 +164,24 @@ p1 = store.private("111")
 p2 = store.private("222")
 pg = store.group("999")
 check("each private QQ has its own history file",
-      p1.path != p2.path and p1.items[0]["content"] == "旧历史"
+      p1.path != p2.path and p1.items[0]["content"] == "111/私聊：旧历史"
       and p2.items == [] and pg.path not in (p1.path, p2.path))
 p1.append("user", "111 的消息")
 check("separate histories do not mix", p2.context(10) == [])
+
+norm_dir = tempfile.mkdtemp()
+old_private = ChatHistory(os.path.join(norm_dir, "private-111.json"), 200)
+old_private.append("user", "旧私聊")
+old_group = ChatHistory(os.path.join(norm_dir, "group-999.json"), 200)
+old_group.append("user", "小明：旧群聊")
+norm_store = HistoryStore(norm_dir, 200)
+check("old private history gets a QQ id prefix",
+      norm_store.private("111").items[0]["content"] == "111/私聊：旧私聊")
+check("old group history gets a group id prefix",
+      norm_store.group("999").items[0]["content"] == "999/群聊：小明：旧群聊")
+check("history normalizing is idempotent",
+      norm_store.private("111").items[0]["content"] == "111/私聊：旧私聊"
+      and norm_store.group("999").items[0]["content"] == "999/群聊：小明：旧群聊")
 
 # 4. 主动消息触发器
 import main as main_mod  # noqa: E402
@@ -206,9 +223,9 @@ captured = []
 b.ai.chat = lambda messages, meta=None, system_fn=None, image=None: captured.append(
     (messages, meta, system_fn, image))
 b._start_mono -= 11
-b._on_qq_message("123", "在吗")
+b._on_qq_message("123", "在吗", "向阳而生.")
 check("QQ message is recorded and sent to the AI queue",
-      b.histories.private("123").items[-1]["content"] == "在吗"
+      b.histories.private("123").items[-1]["content"] == "123（向阳而生.）/私聊：在吗"
       and captured and captured[-1][1]["user_id"] == "123")
 meta = captured[-1][1]
 b._on_ai_reply("在。", True, meta)
@@ -216,11 +233,11 @@ check("AI reply is recorded and sent back to the user",
       b.histories.private("123").items[-1]["content"] == "在。"
       and out[-1] == ("user", "123", "在。"))
 
-b._convo_primed = False
+b._convo_primed_keys.clear()
 b._ai_busy = False
 captured.clear()
-b.histories.private("123").append("user", "继续")
-b._ask_ai([{"role": "user", "content": "继续"}],
+b.histories.private("123").append("user", "123（向阳而生.）/私聊：继续")
+b._ask_ai([{"role": "user", "content": "123（向阳而生.）/私聊：继续"}],
           {"kind": "chat", "user_id": "123",
            "history_key": "private-123", "skip_history_last": True})
 msgs = captured[-1][0]
@@ -232,21 +249,59 @@ check("prompt knows it is chatting through QQ and can see images",
 
 b._ai_busy = False
 captured.clear()
-b._ask_ai([{"role": "user", "content": "再说"}],
+b._ask_ai([{"role": "user", "content": "123（向阳而生.）/私聊：再说"}],
           {"kind": "chat", "user_id": "123",
            "history_key": "private-123", "skip_history_last": True})
 check("built-in follow-up reuses the server-side conversation",
       len(captured[-1][0]) == 1)
+
+b._ai_busy = False
+captured.clear()
+b.histories.private("456").append("assistant", "之前聊过")
+b.histories.private("456").append("user", "456/私聊：你好")
+b._ask_ai([{"role": "user", "content": "456/私聊：你好"}],
+          {"kind": "chat", "user_id": "456",
+           "history_key": "private-456", "skip_history_last": True})
+check("another private user primes its own AI context",
+      len(captured[-1][0]) > 1
+      and not any("123" in str(m["content"]) for m in captured[-1][0]))
+
+import ai_client as ai_mod  # noqa: E402
+
+body_seen = {}
+
+class FakeResp:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+def fake_post(url, json=None, headers=None, timeout=None):
+    body_seen.update(json or {})
+    return FakeResp()
+
+old_post = ai_mod.requests.post
+ai_mod.requests.post = fake_post
+try:
+    ac = ai_mod.AIClient(FakeCfg({
+        "ai_preset": "deepseek_web2api", "ai_base_url": "http://x/v1",
+        "ai_model": "deepseek", "ai_api_key": "k"}))
+    ac._worker([{"role": "user", "content": "hi"}], {"history_key": "private-123"})
+finally:
+    ai_mod.requests.post = old_post
+check("builtin request carries the session id", body_seen.get("session_id") == "private-123")
 
 img = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
 img.write(b"png")
 img.close()
 b._ai_busy = False
 captured.clear()
-b._on_qq_image("123", "看看这个", img.name)
+b._on_qq_image("123", "看看这个", img.name, "向阳而生.")
 check("QQ image is queued with its text",
       captured and captured[-1][3] == img.name
-      and b.histories.private("123").items[-1]["content"] == "看看这个")
+      and b.histories.private("123").items[-1]["content"]
+      == "123（向阳而生.）/私聊：看看这个")
 b._on_ai_reply("看到了。", True, captured[-1][1])
 check("image temp file is removed after reply", not os.path.exists(img.name))
 
@@ -255,9 +310,10 @@ img2.write(b"png")
 img2.close()
 b._ai_busy = False
 captured.clear()
-b._on_qq_image("123", "", img2.name)
+b._on_qq_image("123", "", img2.name, "向阳而生.")
 check("image-only message gets a placeholder",
-      b.histories.private("123").items[-1]["content"] == "（对方发来一张图片）")
+      b.histories.private("123").items[-1]["content"]
+      == "123（向阳而生.）/私聊：（对方发来一张图片）")
 b._on_ai_reply("看到了。", True, captured[-1][1])
 
 b._ai_busy = False
@@ -275,7 +331,7 @@ captured.clear()
 out.clear()
 b._on_group_message("999", "456", "小明", "大家好", "", False)
 check("group chatter is stored without a reply",
-      b.histories.group("999").items[-1]["content"] == "小明：大家好"
+      b.histories.group("999").items[-1]["content"] == "999/群聊：456（小明）：大家好"
       and not captured)
 b._on_group_message("999", "456", "小明", "在吗", "", True)
 check("group mention goes to AI with its own history key",
@@ -297,7 +353,7 @@ dlg._save()
 check("settings parse whitelist and keep a version",
       cfg.get("qq_bridge_allowed_ids") == ["123", "456"]
       and cfg.get("qq_bridge_allowed_groups") == ["789", "1011"]
-      and dlg.version_label.text() == "版本 v0.1.4")
+      and dlg.version_label.text() == "版本 v0.1.5")
 
 b._open_settings()
 opened = b._settings_dlg

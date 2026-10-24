@@ -144,7 +144,8 @@ async function handleChatCompletions(req, res) {
           prompt: parsed.prompt,
           imagePaths: parsed.imagePaths,
           model,
-          onDelta
+          onDelta,
+          sessionId: parsed.sessionId
         });
       } finally {
         await cleanupFiles(parsed.imagePaths);
@@ -158,7 +159,8 @@ async function handleChatCompletions(req, res) {
       return await client.generate({
         prompt: parsed.prompt,
         imagePaths: parsed.imagePaths,
-        model
+        model,
+        sessionId: parsed.sessionId
       });
     } finally {
       await cleanupFiles(parsed.imagePaths);

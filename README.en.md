@@ -22,6 +22,8 @@ groups, and speak up on its own when the moment fits.
 - **Conversation continuity across restarts**: each private QQ and each group has its own
   history file, and the most recent messages are imported when starting a new
   conversation. History files never mix.
+- **Identifiable sources**: user messages use `QQ（nickname）/private: text` or
+  `group/group chat: sender QQ（nickname）: text`; the QQ or group number is the unique id.
 - **Configurable persona and AI endpoint**: built-in DeepSeek Web2API or any
   OpenAI-compatible API (base_url / API key / model).
 - **Computer context**: time, foreground apps, now-playing media, weather, and account
@@ -100,11 +102,12 @@ keeps contextual triggers and disables random small talk.
 - History files: `history/private-<QQ>.json` and `history/group-<group>.json` next to the
   executable, each capped by `chat_history_max`. The old global `chat_history.json` is
   migrated to the first private QQ that accesses it; other sessions start empty.
+- User messages use `QQ（nickname）/private: text` and
+  `group/group chat: sender QQ（nickname）: text`. Old history is prefixed on first load.
 - The first AI request after each start includes the latest `ai_context_n` messages
   (default 10), so a restart continues the same conversation.
-- The built-in web AI still shares one server-side DeepSeek conversation across all
-  sessions; history files stay separate, but use a custom OpenAI-compatible endpoint if
-  AI context must be fully isolated.
+- The built-in web AI keeps a separate DeepSeek conversation for each QQ and group, so
+  simultaneous private chats do not share context.
 - QQ private images are downloaded and passed to the AI (one image, up to 15 MB), with
   optional text alongside. Vision requires a vision-capable model: the built-in DeepSeek
   Web2API supports it; the official `deepseek-chat` API is text-only and will error or

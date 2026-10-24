@@ -95,13 +95,18 @@ class AIClient(QObject):
         # 连接超时短（服务没起来立刻失败），读超时长：内置免费 AI 读网页/思考
         # 可能一两分钟不出结果，此时并没有短路，给足时间别过早弹兜底文本。
         read_timeout = float(self.config.get("ai_timeout_s", 300) or 300)
+        body = {"model": model, "messages": messages}
+        if self.config.get("ai_preset") == "deepseek_web2api":
+            session_id = str((meta or {}).get("history_key") or "")
+            if session_id:
+                body["session_id"] = session_id
         try:
             # 与 vendor 的 web2api.log 对时间线用：出问题能看出请求是什么时候发出去的
             petlog.log("ai request start: model=%s msgs=%d image=%s"
                        % (model, len(messages), bool(image)))
             r = requests.post(
                 base + "/chat/completions",
-                json={"model": model, "messages": messages},
+                json=body,
                 headers=headers,
                 timeout=(10, read_timeout),
             )

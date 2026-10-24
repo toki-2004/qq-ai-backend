@@ -257,7 +257,7 @@ class QQAI:
         self._settings_dlg = None
         self._tray = None
         self._pending_sleep = ""
-        self._convo_primed = False
+        self._convo_primed_keys = set()
         self._ai_busy = False
         self._ai_queue = []
         self._persona_active = str(self.config.get("ai_persona", "")).strip()
@@ -296,7 +296,7 @@ class QQAI:
 
     def _on_web2api_status(self, ok, msg):
         if msg:
-            self._convo_primed = False
+            self._convo_primed_keys.clear()
         if msg == "login":
             self._notify("即将清空旧登录态并打开全新的 DeepSeek 登录浏览器；登录完成后关闭那个控制台窗口。")
             if self._tray is not None:
@@ -325,6 +325,8 @@ class QQAI:
             "你和对方是平等的，没有主仆或从属关系；怎么称呼对方、保持怎样的距离，"
             "由你自己的感受决定。"
             + scene +
+            "聊天记录每行开头的“QQ号（昵称）/私聊”或“群号/群聊”表示来源；"
+            "群聊行还会带发送者 QQ 和昵称。"
             "你能自然感知到这台电脑上的时间、正在用的应用、声音和天气；"
             "这些是你此刻知道的事，聊天时顺手用，不要逐条播报，也不要解释自己是怎么知道的。"
         )
@@ -370,11 +372,12 @@ class QQAI:
         self._ai_busy = True
         try:
             builtin = self.config.get("ai_preset") == "deepseek_web2api"
-            fresh = not builtin or not self._convo_primed
-            if fresh:
-                self._convo_primed = True
+            key = str(meta.get("history_key") or "proactive")
+            fresh = not builtin or key not in self._convo_primed_keys
+            if fresh and builtin:
+                self._convo_primed_keys.add(key)
             n = int(self.config.get("ai_context_n", 10) or 10)
-            hist = self.histories.get(meta.get("history_key", "proactive"))
+            hist = self.histories.get(key)
             ctx = hist.context(n)
             if meta.get("skip_history_last") and ctx:
                 ctx = ctx[:-1]
@@ -401,7 +404,8 @@ class QQAI:
             self._enter_sleep(pending)
         if not ok:
             if not meta.get("timeout"):
-                self._convo_primed = False
+                self._convo_primed_keys.discard(
+                    str(meta.get("history_key") or "proactive"))
             if bool(self.config.get("ai_fallback_enabled", True)):
                 self._deliver(meta, self._failure_hint(meta))
         else:
@@ -434,7 +438,17 @@ class QQAI:
         return str(self.config.get("ai_fallback_text", "唔……我现在有点短路了"))
 
     # ---------- QQ 消息 ----------
-    def _on_qq_message(self, user_id, text):
+    @staticmethod
+    def _chat_line(chat_id, text, sender_id, sender_name, group=False):
+        if group:
+            who = ("%s（%s）" % (sender_id, sender_name)
+                   if sender_name and sender_name != sender_id else sender_id)
+            return "%s/群聊：%s：%s" % (chat_id, who, text)
+        who = ("%s（%s）" % (chat_id, sender_name)
+               if sender_name and sender_name != chat_id else chat_id)
+        return "%s/私聊：%s" % (who, text)
+
+    def _on_qq_message(self, user_id, text, sender=""):
         if self.sleep.is_asleep():
             self.qq.send_text(user_id, sleep.SLEEP_TEXT)
             return
@@ -442,13 +456,14 @@ class QQAI:
         kind = sleep.trigger_kind(text)
         if kind:
             self._pending_sleep = kind
-        self.histories.private(user_id).append("user", text)
-        self._ask_ai([{"role": "user", "content": text}],
+        line = self._chat_line(user_id, text, user_id, sender)
+        self.histories.private(user_id).append("user", line)
+        self._ask_ai([{"role": "user", "content": line}],
                      {"kind": "chat", "user_id": user_id,
                       "history_key": "private-%s" % user_id,
                       "skip_history_last": True})
 
-    def _on_qq_image(self, user_id, text, path):
+    def _on_qq_image(self, user_id, text, path, sender=""):
         if self.sleep.is_asleep():
             self.qq.send_text(user_id, sleep.SLEEP_TEXT)
             self._drop_image({"image": path})
@@ -458,15 +473,16 @@ class QQAI:
         if kind:
             self._pending_sleep = kind
         content = text or "（对方发来一张图片）"
-        self.histories.private(user_id).append("user", content)
-        self._ask_ai([{"role": "user", "content": content}],
+        line = self._chat_line(user_id, content, user_id, sender)
+        self.histories.private(user_id).append("user", line)
+        self._ask_ai([{"role": "user", "content": line}],
                      {"kind": "chat", "user_id": user_id,
                       "history_key": "private-%s" % user_id,
                       "skip_history_last": True, "image": path})
 
     def _on_group_message(self, group_id, user_id, sender, text, path, mentioned):
         content = text or "（发来一张图片）"
-        line = "%s：%s" % (sender, content)
+        line = self._chat_line(group_id, content, user_id, sender, group=True)
         self.histories.group(group_id).append("user", line)
         if not mentioned:
             self._drop_image({"image": path})
@@ -508,7 +524,7 @@ class QQAI:
     def _on_wake(self, kind):
         petlog.log("sleep: wake line for %s" % kind)
         self._ask_ai([{"role": "user", "content": sleep.WAKE_PROMPTS.get(kind, "")}],
-                     {"kind": "wake"})
+                     {"kind": "wake", "history_key": "proactive"})
 
     def _enter_sleep(self, kind):
         until = self.sleep.put_to_sleep(kind)
@@ -560,6 +576,7 @@ class QQAI:
         self.balance.poll()
         builtin = self.config.get("ai_preset") == "deepseek_web2api"
         if builtin:
+            self._convo_primed_keys.clear()
             web2api.apply_max_messages(self.config.get("ai_web2api_max_messages", 20))
             if os.path.isdir(web2api.VENDOR_DIR):
                 self.web2api.ensure_async()
@@ -574,7 +591,7 @@ class QQAI:
         if persona == self._persona_active:
             return
         self._persona_active = persona
-        self._convo_primed = False
+        self._convo_primed_keys.clear()
         petlog.log("persona changed: starting a new conversation")
         if self.config.get("ai_preset") == "deepseek_web2api":
             web2api.restart_async()

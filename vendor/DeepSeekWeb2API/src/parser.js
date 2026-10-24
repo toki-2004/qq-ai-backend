@@ -94,6 +94,7 @@ export async function parseChatRequest(body, options) {
   return {
     prompt,
     imagePaths,
+    sessionId: typeof body.session_id === 'string' ? body.session_id.slice(0, 128) : '',
     stream: body.stream === true,
     requestedModel: body.model || 'deepseek'
   };

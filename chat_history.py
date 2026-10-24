@@ -104,11 +104,30 @@ class HistoryStore:
         safe = re.sub(r"[^0-9A-Za-z_-]", "_", str(key or "proactive"))
         return os.path.join(self.base_dir, safe + ".json")
 
+    def _normalize(self, key, hist):
+        if key.startswith("private-"):
+            prefix = key[len("private-"):] + "/私聊："
+        elif key.startswith("group-"):
+            prefix = key[len("group-"):] + "/群聊："
+        else:
+            return False
+        changed = False
+        for item in hist.items:
+            if item.get("role") != "user":
+                continue
+            content = str(item.get("content") or "")
+            if not content.startswith(prefix):
+                item["content"] = prefix + content
+                changed = True
+        return changed
+
     def get(self, key):
         key = str(key or "proactive")
         if key in self._cache:
             return self._cache[key]
         hist = ChatHistory(self._path(key), self.max_n)
+        if self._normalize(key, hist):
+            hist.save()
         self._cache[key] = hist
         return hist
 
@@ -121,6 +140,7 @@ class HistoryStore:
             old = ChatHistory(self.legacy_path, self.max_n)
             if old.items:
                 hist.items = old.items[-self.max_n:]
+                self._normalize(key, hist)
                 hist.save()
                 petlog.log("history migrated to %s" % hist.path)
         return hist

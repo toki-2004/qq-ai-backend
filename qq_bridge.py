@@ -167,8 +167,8 @@ def download_image(url, timeout=30):
 
 
 class QQBridge(QObject):
-    messageReceived = pyqtSignal(str, str)  # user_id, text
-    imageReceived = pyqtSignal(str, str, str)  # user_id, text, local image path
+    messageReceived = pyqtSignal(str, str, str)  # user_id, text, nickname
+    imageReceived = pyqtSignal(str, str, str, str)  # user_id, text, path, nickname
     groupMessageReceived = pyqtSignal(str, str, str, str, str, bool)
     # group_id, user_id, sender, text, local image path, mentioned
 
@@ -296,15 +296,17 @@ class QQBridge(QObject):
         image_url = extract_image(event.get("message"))
         if not text and not image_url:
             return
+        sender = event.get("sender") or {}
+        name = str(sender.get("card") or sender.get("nickname") or user_id)
         if image_url:
             petlog.log("qq bridge: image from %s" % user_id)
             threading.Thread(target=self._fetch_image,
-                             args=(user_id, text, image_url), daemon=True).start()
+                             args=(user_id, text, image_url, name), daemon=True).start()
             return
         petlog.log("qq bridge: received %d chars from %s" % (len(text), user_id))
-        self.messageReceived.emit(user_id, text)
+        self.messageReceived.emit(user_id, text, name)
 
-    def _fetch_image(self, user_id, text, url):
+    def _fetch_image(self, user_id, text, url, name):
         path = download_image(url)
         if not self._running:
             if path:
@@ -315,12 +317,12 @@ class QQBridge(QObject):
             return
         if not path:
             if text:
-                self.messageReceived.emit(user_id, text)
+                self.messageReceived.emit(user_id, text, name)
             else:
                 self.send_text(user_id, "图片没下载下来，再发一次吧。")
             return
         petlog.log("qq bridge: image ready from %s" % user_id)
-        self.imageReceived.emit(user_id, text, path)
+        self.imageReceived.emit(user_id, text, path, name)
 
     def _handle_group(self, event):
         group_id = str(event.get("group_id") or "")

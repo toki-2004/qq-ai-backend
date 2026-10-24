@@ -41,8 +41,8 @@ export class DeepSeekClient {
     this.context = null;
     this.page = null;
     this.cdp = null;
-    this.messagesInConversation = 0;  // 当前对话里本次进程已发的消息数
-    this.currentConversationId = null;  // 本次进程自己创建的对话 id（绝不进入其他对话）
+    this.sessions = new Map();  // QQ/群会话各自记住自己的网页对话，避免串上下文
+    this.currentConversationId = null;  // 最近活跃的对话 id，仅用于 /health
     this.loggedIn = null;  // null=还没查过；true/false=最近一次进对话界面的结果
     this.lastUse = Date.now();  // 最近一次用到浏览器（闲置关浏览器用）
     this.busy = false;          // 正在生成：别在这时候关浏览器
@@ -92,27 +92,43 @@ export class DeepSeekClient {
     await new Promise(() => {});
   }
 
-  async generate({ prompt, imagePaths, model, onDelta }) {
+  async generate({ prompt, imagePaths, model, onDelta, sessionId }) {
     this.busy = true;
     this.lastUse = Date.now();
     try {
-      return await this._generate({ prompt, imagePaths, model, onDelta });
+      return await this._generate({ prompt, imagePaths, model, onDelta, sessionId });
     } finally {
       this.busy = false;
       this.lastUse = Date.now();
     }
   }
 
-  async _generate({ prompt, imagePaths, model, onDelta }) {
+  _session(sessionId) {
+    const key = sessionId || 'default';
+    let state = this.sessions.get(key);
+    if (!state) {
+      state = { messagesInConversation: 0, currentConversationId: null };
+      this.sessions.set(key, state);
+    }
+    return state;
+  }
+
+  _resetSession(state) {
+    state.messagesInConversation = 0;
+    state.currentConversationId = null;
+  }
+
+  async _generate({ prompt, imagePaths, model, onDelta, sessionId }) {
     await this.ensureStarted();
     const page = this.page;
     const capabilities = model.capabilities;
+    const session = this._session(sessionId);
 
     let responseState = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       const startedAt = Date.now();
       try {
-        await this.ensureConversationPage();
+        await this.ensureConversationPage(session);
         await this.waitForComposer();
         await this.configureMode(capabilities, imagePaths.length > 0);
         await this.fillPrompt(prompt);
@@ -126,26 +142,27 @@ export class DeepSeekClient {
         if (!result.text && !result.reasoning) {
           throw new ApiError('DeepSeek returned an empty response', 502, 'empty_response', 'server_error');
         }
-        this.messagesInConversation += 1;
+        session.messagesInConversation += 1;
         const m = /\/a\/chat\/s\/([0-9a-f-]{36})/i.exec(page.url());
-        if (m) this.currentConversationId = m[1];
+        if (m) {
+          session.currentConversationId = m[1];
+          this.currentConversationId = m[1];
+        }
         return result;
       } catch (err) {
         // 疑似登录失效：可能只是页面还在加载/被切走，回首页重新进一次再试；
         // 真的掉登录时第二次仍会失败，那时才把 login_required 抛给上层
         if (err.code === 'login_required' && attempt === 0) {
           logger.warn('login page seen, retrying after reload', { error: err.message });
-          this.messagesInConversation = 0;
-          this.currentConversationId = null;
+          this._resetSession(session);
           await this.page.goto(this.config.targetUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
           continue;
         }
         if (err.code === 'login_required') throw err;
         // 会话在网页端被用户删掉等失效场景：自动开新对话重试一次
-        if (attempt === 0 && this._conversationLooksGone(responseState)) {
+        if (attempt === 0 && this._conversationLooksGone(responseState, session)) {
           logger.warn('conversation invalid, retrying in a new conversation', { error: err.message });
-          this.messagesInConversation = 0;
-          this.currentConversationId = null;
+          this._resetSession(session);
           await this.page.goto(this.config.targetUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
           continue;
         }
@@ -155,13 +172,13 @@ export class DeepSeekClient {
     throw new ApiError('DeepSeek request failed', 502, 'deepseek_error', 'server_error');
   }
 
-  _conversationLooksGone(responseState) {
+  _conversationLooksGone(responseState, session) {
     const s = (responseState && responseState.state) || {};
     return conversationLooksGone({
       httpStatus: s.httpStatus || 0,
       errorText: s.errorText || s.lastError || '',
       url: this.page ? this.page.url() : '',
-      conversationId: this.currentConversationId || '',
+      conversationId: session.currentConversationId || '',
       sawCompletionResponse: Boolean(s.sawCompletionResponse)
     });
   }
@@ -169,28 +186,26 @@ export class DeepSeekClient {
   /* 会话管理（安全版）：只复用"本次进程自己创建"的对话，绝不删除、绝不进入其他对话。
      - 页面还在自己的对话里：继续复用（不导航，避免每条消息新建对话）；
      - 首次消息 / 触顶 / 页面被切走：回首页开新对话（不删除任何历史）。 */
-  async ensureConversationPage() {
+  async ensureConversationPage(session) {
     const limit = this.config.newConversationAfter;
-    if (limit > 0 && this.messagesInConversation >= limit) {
+    if (limit > 0 && session.messagesInConversation >= limit) {
       await this.page.goto(this.config.targetUrl, { waitUntil: 'domcontentloaded' });
-      this.messagesInConversation = 0;
-      this.currentConversationId = null;
+      this._resetSession(session);
       return;
     }
-    if (this.currentConversationId) {
-      if (this.page.url().includes(this.currentConversationId)) {
+    if (session.currentConversationId) {
+      if (this.page.url().includes(session.currentConversationId)) {
         return;  // 还在自己的对话里：继续复用
       }
       // 浏览器被闲置关掉/崩溃重启过：回到"本次进程自己创建的那段对话"，
       // 不要另开新的（绝不进入别人的对话，只是找回自己的）
-      const back = `${this.config.targetUrl.replace(/\/+$/, '')}/a/chat/s/${this.currentConversationId}`;
+      const back = `${this.config.targetUrl.replace(/\/+$/, '')}/a/chat/s/${session.currentConversationId}`;
       await this.page.goto(back, { waitUntil: 'domcontentloaded' }).catch(() => {});
-      if (this.page.url().includes(this.currentConversationId)) return;
+      if (this.page.url().includes(session.currentConversationId)) return;
       logger.warn('own conversation could not be reopened; starting a new one');
     }
     await this.page.goto(this.config.targetUrl, { waitUntil: 'domcontentloaded' });
-    this.messagesInConversation = 0;
-    this.currentConversationId = null;
+    this._resetSession(session);
   }
 
   async ensureStarted() {
